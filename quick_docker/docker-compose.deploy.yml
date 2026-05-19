@@ -1,0 +1,30 @@
+name: hermes-prod
+
+services:
+  gateway:
+    image: ${HERMES_IMAGE:-kevinroo/hermes-agent:business-api}
+    container_name: hermes-gateway
+    restart: unless-stopped
+    ports:
+      - "${BUSINESS_API_PUBLISHED_PORT:-24000}:${BUSINESS_API_PORT:-24000}"
+    environment:
+      HERMES_UID: ${HERMES_UID:-10000}
+      HERMES_GID: ${HERMES_GID:-10000}
+      HERMES_HOME: /opt/data
+      HERMES_WORKSPACE: /opt/workspace
+      HERMES_SYNC_TERMINAL_CWD: "1"
+      BUSINESS_API_ENABLED: "true"
+      BUSINESS_API_HOST: "0.0.0.0"
+      BUSINESS_API_PORT: ${BUSINESS_API_PORT:-24000}
+      BUSINESS_API_KEY: ${BUSINESS_API_KEY:?set BUSINESS_API_KEY}
+      BUSINESS_API_WORKSPACE_ROOT: ${BUSINESS_API_WORKSPACE_ROOT:-/opt/workspace}
+      BUSINESS_API_MAX_UPLOAD_BYTES: ${BUSINESS_API_MAX_UPLOAD_BYTES:-104857600}
+    volumes:
+      - ./data:/opt/data
+      - ./workspace:/opt/workspace
+    command:
+      - bash
+      - -lc
+      - |
+        hermes plugins enable platforms/business_api >/dev/null 2>&1 || true
+        exec hermes gateway run
