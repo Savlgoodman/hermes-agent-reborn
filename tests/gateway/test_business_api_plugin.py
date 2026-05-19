@@ -35,6 +35,7 @@ def _create_app(adapter: BusinessAPIAdapter) -> web.Application:
     app.router.add_post("/v1/responses", adapter._handle_responses)
     app.router.add_get("/api/responses/{response_id}/context", adapter._handle_response_context)
     app.router.add_post("/api/files", adapter._handle_file_upload)
+    app.router.add_get("/api/files", adapter._handle_file_download)
     return app
 
 
@@ -188,3 +189,109 @@ async def test_file_upload_rejects_path_traversal(tmp_path):
 
     assert body["error"]["code"] == "invalid_target_path"
     assert not (tmp_path / "outside" / "escape.txt").exists()
+
+
+@pytest.mark.asyncio
+async def test_file_download_reads_file_inside_workspace(tmp_path):
+    workspace = tmp_path / "workspace"
+    target_dir = workspace / "docs"
+    target_dir.mkdir(parents=True)
+    (target_dir / "123.txt").write_text("hello", encoding="utf-8")
+    adapter = _make_adapter(workspace)
+    app = _create_app(adapter)
+
+    async with TestClient(TestServer(app)) as cli:
+        resp = await cli.get(
+            "/api/files",
+            params={"path": str(target_dir), "file_name": "123.txt"},
+            headers=_auth_headers(),
+        )
+        assert resp.status == 200
+        body = await resp.read()
+
+    assert body == b"hello"
+    assert "attachment" in resp.headers.get("Content-Disposition", "")
+
+
+@pytest.mark.asyncio
+async def test_file_download_rejects_path_outside_workspace(tmp_path):
+    workspace = tmp_path / "workspace"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("secret", encoding="utf-8")
+    adapter = _make_adapter(workspace)
+    app = _create_app(adapter)
+
+    async with TestClient(TestServer(app)) as cli:
+        resp = await cli.get(
+            "/api/files",
+            params={"path": "../outside", "file_name": "secret.txt"},
+            headers=_auth_headers(),
+        )
+        assert resp.status == 400
+        body = await resp.json()
+
+    assert body["error"]["code"] == "invalid_file_path"
+
+
+@pytest.mark.asyncio
+async def test_file_download_treats_leading_slash_as_workspace_relative(tmp_path):
+    workspace = tmp_path / "workspace"
+    target_dir = workspace / "etc"
+    target_dir.mkdir(parents=True)
+    (target_dir / "passwd").write_text("workspace passwd", encoding="utf-8")
+    adapter = _make_adapter(workspace)
+    app = _create_app(adapter)
+
+    async with TestClient(TestServer(app)) as cli:
+        resp = await cli.get(
+            "/api/files",
+            params={"path": "/etc", "file_name": "passwd"},
+            headers=_auth_headers(),
+        )
+        assert resp.status == 200
+        body = await resp.read()
+
+    assert body == b"workspace passwd"
+
+
+@pytest.mark.asyncio
+async def test_file_download_rejects_file_name_traversal(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    adapter = _make_adapter(workspace)
+    app = _create_app(adapter)
+
+    async with TestClient(TestServer(app)) as cli:
+        resp = await cli.get(
+            "/api/files",
+            params={"path": str(workspace), "file_name": "../secret.txt"},
+            headers=_auth_headers(),
+        )
+        assert resp.status == 400
+        body = await resp.json()
+
+    assert body["error"]["code"] == "invalid_file_path"
+
+
+@pytest.mark.asyncio
+async def test_file_download_returns_404_for_missing_or_directory(tmp_path):
+    workspace = tmp_path / "workspace"
+    (workspace / "folder").mkdir(parents=True)
+    adapter = _make_adapter(workspace)
+    app = _create_app(adapter)
+
+    async with TestClient(TestServer(app)) as cli:
+        missing = await cli.get(
+            "/api/files",
+            params={"path": str(workspace), "file_name": "missing.txt"},
+            headers=_auth_headers(),
+        )
+        directory = await cli.get(
+            "/api/files",
+            params={"path": str(workspace), "file_name": "folder"},
+            headers=_auth_headers(),
+        )
+
+    assert missing.status == 404
+    assert directory.status == 404

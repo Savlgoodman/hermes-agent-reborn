@@ -6,6 +6,7 @@ implementation and response_store.db. It adds a small business control plane:
 * ``GET /api/responses/{response_id}/context`` returns the transcript snapshot
   and usage/model metadata for the end of that response.
 * ``POST /api/files`` uploads a file under a configured workspace root.
+* ``GET /api/files`` downloads a file from the configured workspace root.
 
 The plugin runs as its own gateway platform and port so it does not require
 core route-extension hooks in ``gateway.platforms.api_server``.
@@ -22,6 +23,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any, Dict, Optional
+from urllib.parse import quote
 
 try:
     from aiohttp import web
@@ -240,6 +242,7 @@ class BusinessAPIAdapter(APIServerAdapter):
                 self._handle_response_context,
             )
             self._app.router.add_post("/api/files", self._handle_file_upload)
+            self._app.router.add_get("/api/files", self._handle_file_download)
 
             self._runner = web.AppRunner(self._app)
             await self._runner.setup()
@@ -442,15 +445,59 @@ class BusinessAPIAdapter(APIServerAdapter):
         raw = str(target_path or "").strip()
         if _CONTROL_CHARS.search(raw):
             raise ValueError("target_path contains invalid control characters")
-        base = Path(raw).expanduser() if raw else self._workspace_root
-        if not base.is_absolute():
-            base = self._workspace_root / base
+
+        if not raw:
+            base = self._workspace_root
+        else:
+            raw_path = Path(raw)
+            base = None
+            if raw_path.is_absolute():
+                resolved_raw = raw_path.resolve()
+                try:
+                    resolved_raw.relative_to(self._workspace_root)
+                    base = resolved_raw
+                except ValueError:
+                    # A leading slash is accepted as a workspace-root relative
+                    # path unless it is a real absolute path inside the root.
+                    if re.match(r"^[A-Za-z]:[\\/]", raw):
+                        raise ValueError("target_path must stay inside workspace_root")
+
+            if base is None:
+                base = self._workspace_root / raw.lstrip("/\\")
+
         resolved = base.resolve()
         try:
             resolved.relative_to(self._workspace_root)
         except ValueError as exc:
             raise ValueError("target_path must stay inside workspace_root") from exc
         return resolved
+
+    def _validate_download_filename(self, file_name: str) -> str:
+        raw = str(file_name or "").strip()
+        if not raw:
+            raise ValueError("file_name is required")
+        if _CONTROL_CHARS.search(raw):
+            raise ValueError("file_name contains invalid control characters")
+        if raw in {".", ".."} or "/" in raw or "\\" in raw:
+            raise ValueError("file_name must be a plain file name")
+        return raw
+
+    def _resolve_download_target(self, target_path: str, file_name: str) -> Path:
+        target_dir = self._resolve_upload_target(target_path)
+        safe_name = self._validate_download_filename(file_name)
+        target = (target_dir / safe_name).resolve()
+        try:
+            target.relative_to(self._workspace_root)
+        except ValueError as exc:
+            raise ValueError("file path must stay inside workspace_root") from exc
+        return target
+
+    @staticmethod
+    def _content_disposition(file_name: str) -> str:
+        fallback = re.sub(r'[^A-Za-z0-9._-]+', "_", file_name).strip("._")
+        if not fallback:
+            fallback = "download.bin"
+        return f'attachment; filename="{fallback[:180]}"; filename*=UTF-8\'\'{quote(file_name)}'
 
     async def _handle_file_upload(self, request: "web.Request") -> "web.Response":
         auth_err = self._check_auth(request)
@@ -537,6 +584,28 @@ class BusinessAPIAdapter(APIServerAdapter):
         if saved is None:
             return web.json_response(_openai_error("Missing file field.", code="missing_file"), status=400)
         return web.json_response({"object": "business_api.file", **saved}, status=201)
+
+    async def _handle_file_download(self, request: "web.Request") -> "web.StreamResponse":
+        auth_err = self._check_auth(request)
+        if auth_err:
+            return auth_err
+
+        try:
+            target = self._resolve_download_target(
+                request.query.get("path", ""),
+                request.query.get("file_name", ""),
+            )
+        except ValueError as exc:
+            return web.json_response(_openai_error(str(exc), code="invalid_file_path"), status=400)
+
+        if not target.exists() or not target.is_file():
+            return web.json_response(_openai_error("File not found.", code="file_not_found"), status=404)
+
+        headers = {
+            "Content-Disposition": self._content_disposition(target.name),
+            "X-Business-API-Workspace-Root": str(self._workspace_root),
+        }
+        return web.FileResponse(path=target, headers=headers)
 
 
 def check_requirements() -> bool:

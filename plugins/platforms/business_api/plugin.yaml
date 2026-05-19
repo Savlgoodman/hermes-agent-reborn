@@ -5,7 +5,7 @@ version: 1.0.0
 description: >
   Business HTTP API gateway adapter for Hermes Agent.
   Exposes an OpenAI-compatible Responses endpoint with Hermes-specific
-  context and usage inspection, plus a guarded file-upload endpoint for
+  context and usage inspection, plus guarded file upload/download endpoints for
   server-side Docker/workspace deployments.
 author: Hermes Agent
 optional_env:
