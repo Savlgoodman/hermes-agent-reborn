@@ -708,7 +708,7 @@ def _plugin_exists(name: str) -> bool:
 
 
 def _discover_all_plugins() -> list:
-    """Return a list of (key, version, description, source, dir_path) for
+    """Return a list of (key, version, description, source, dir_path, kind) for
     every plugin the loader can see — user + bundled.
 
     Mirrors :meth:`PluginManager._scan_directory_level` so category-namespaced
@@ -730,7 +730,7 @@ def _discover_all_plugins() -> list:
     except ImportError:
         yaml = None
 
-    seen: dict = {}  # key -> (key, version, description, source, path)
+    seen: dict = {}  # key -> (key, version, description, source, path, kind)
 
     def _scan(base: Path, source: str, prefix: str, depth: int) -> None:
         if not base.is_dir():
@@ -752,6 +752,7 @@ def _discover_all_plugins() -> list:
                 manifest_name = d.name
                 version = ""
                 description = ""
+                kind = "standalone"
                 if yaml:
                     try:
                         with open(manifest_file, encoding="utf-8") as f:
@@ -759,6 +760,7 @@ def _discover_all_plugins() -> list:
                         manifest_name = manifest.get("name", d.name)
                         version = manifest.get("version", "")
                         description = manifest.get("description", "")
+                        kind = str(manifest.get("kind", "standalone")).strip().lower()
                     except Exception:
                         pass
                 # Path-derived key, intentionally ignoring the manifest
@@ -773,7 +775,7 @@ def _discover_all_plugins() -> list:
                 # Bundled is scanned before user, so the user pass overwrites
                 # bundled entries with the same key — matches
                 # PluginManager.discover_and_load's "user wins" semantics.
-                seen[key] = (key, version, description, src_label, d)
+                seen[key] = (key, version, description, src_label, d, kind)
                 continue
 
             # No manifest at this level — treat as a category namespace and
@@ -788,6 +790,22 @@ def _discover_all_plugins() -> list:
     _scan(_plugins_dir(), "user", "", 0)
 
     return list(seen.values())
+
+
+def _configured_platform_plugin(plugin_dir: Path, kind: str) -> bool:
+    if kind != "platform":
+        return False
+    platform_name = plugin_dir.name
+    try:
+        from hermes_cli.config import load_config
+
+        config = load_config()
+    except Exception:
+        return False
+    block = config.get(platform_name)
+    if not isinstance(block, dict):
+        return False
+    return bool(block.get("enabled") or block.get("key") or block.get("extra", {}).get("key"))
 
 
 def cmd_list() -> None:
@@ -812,10 +830,12 @@ def cmd_list() -> None:
     table.add_column("Description")
     table.add_column("Source", style="dim")
 
-    for name, version, description, source, _dir in entries:
+    for name, version, description, source, plugin_dir, kind in entries:
         if name in disabled:
             status = "[red]disabled[/red]"
         elif name in enabled:
+            status = "[green]enabled[/green]"
+        elif _configured_platform_plugin(plugin_dir, kind):
             status = "[green]enabled[/green]"
         else:
             status = "[yellow]not enabled[/yellow]"
