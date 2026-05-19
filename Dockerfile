@@ -6,6 +6,8 @@ FROM debian:13.4
 ARG DOTNET_CHANNEL=8.0
 ARG DOTNET_INSTALL_SCRIPT_URL=https://dot.net/v1/dotnet-install.sh
 ARG DOTNET_INSTALL_FEED=
+ARG HERMES_DOCKER_EXTRAS=all
+ARG HERMES_DOCKER_EXTRA_PACKAGES=anthropic==0.87.0
 ARG APT_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/debian
 ARG APT_SECURITY_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/debian-security
 
@@ -77,6 +79,8 @@ RUN --mount=type=cache,target=/root/.npm,sharing=locked \
 # ---------- Source code ----------
 # .dockerignore excludes node_modules, so the installs above survive.
 COPY --chown=hermes:hermes . .
+RUN sed -i 's/\r$//' /opt/hermes/docker/entrypoint.sh && \
+    chmod 0755 /opt/hermes/docker/entrypoint.sh
 
 # ---------- Permissions ----------
 # Make install dir world-readable so any HERMES_UID can read it at runtime.
@@ -88,7 +92,10 @@ RUN chmod -R a+rX /opt/hermes
 
 # ---------- Python virtualenv ----------
 RUN uv venv && \
-    uv pip install --no-cache-dir -e ".[all]"
+    uv pip install --no-cache-dir -e ".[${HERMES_DOCKER_EXTRAS}]" && \
+    if [ -n "$HERMES_DOCKER_EXTRA_PACKAGES" ]; then \
+        uv pip install --no-cache-dir $HERMES_DOCKER_EXTRA_PACKAGES; \
+    fi
 
 # ---------- Runtime ----------
 ENV HERMES_HOME=/opt/data

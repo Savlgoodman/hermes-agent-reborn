@@ -19,6 +19,14 @@
 docker build -t kevinroo/hermes-agent:business-api .
 ```
 
+默认镜像会安装 Hermes 的 `all` extra，并额外预装 Anthropic SDK，适合使用 Anthropic/Claude provider 的部署。如果需要额外预装其他运行时依赖，可以用 `HERMES_DOCKER_EXTRA_PACKAGES`：
+
+```bash
+docker build \
+  --build-arg HERMES_DOCKER_EXTRA_PACKAGES="anthropic==0.87.0 boto3==1.42.89" \
+  -t kevinroo/hermes-agent:business-api .
+```
+
 如果要换成你自己的镜像名：
 
 ```bash
@@ -95,18 +103,18 @@ command: ["gateway", "run"]
 hermes gateway run
 ```
 
-但是当前 compose 使用的是 `bash -lc`，因为启动前需要先确保 Business API 插件启用：
+但是当前 compose 使用的是 `bash -c`，因为启动前需要先确保 Business API 插件启用：
 
 ```yaml
 command:
   - bash
-  - -lc
+  - -c
   - |
-    hermes plugins enable platforms/business_api >/dev/null 2>&1 || true
-    exec hermes gateway run
+    /opt/hermes/.venv/bin/hermes plugins enable platforms/business_api >/dev/null 2>&1 || true
+    exec /opt/hermes/.venv/bin/hermes gateway run
 ```
 
-这里第一个参数是 `bash`，entrypoint 会把它当成真实可执行文件直接运行，不会再自动补 `hermes`，所以脚本内部必须显式写 `hermes plugins ...` 和 `hermes gateway run`。
+这里第一个参数是 `bash`，entrypoint 会把它当成真实可执行文件直接运行，不会再自动补 `hermes`。脚本内部使用 `/opt/hermes/.venv/bin/hermes` 绝对路径，是为了避免 login shell 或 PATH 被重置后找不到 `hermes` 命令。
 
 这样即使 `data/` 是空目录，容器第一次启动时也会先把 `platforms/business_api` 写入 Hermes 配置，再启动 gateway。
 
