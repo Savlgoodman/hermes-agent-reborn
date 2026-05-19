@@ -4,6 +4,8 @@ FROM tianon/gosu:1.19-trixie@sha256:3b176695959c71e123eb390d427efc665eeb561b1540
 FROM debian:13.4
 
 ARG DOTNET_CHANNEL=8.0
+ARG DOTNET_INSTALL_SCRIPT_URL=https://dot.net/v1/dotnet-install.sh
+ARG DOTNET_INSTALL_FEED=
 ARG APT_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/debian
 ARG APT_SECURITY_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/debian-security
 
@@ -39,8 +41,18 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p "$DOTNET_ROOT" && \
-    curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh && \
-    bash /tmp/dotnet-install.sh --channel "$DOTNET_CHANNEL" --install-dir "$DOTNET_ROOT" && \
+    curl -fsSL \
+        --retry 6 \
+        --retry-delay 5 \
+        --retry-all-errors \
+        --connect-timeout 20 \
+        "$DOTNET_INSTALL_SCRIPT_URL" \
+        -o /tmp/dotnet-install.sh && \
+    dotnet_install_args="--channel $DOTNET_CHANNEL --install-dir $DOTNET_ROOT" && \
+    if [ -n "$DOTNET_INSTALL_FEED" ]; then \
+        dotnet_install_args="$dotnet_install_args --azure-feed $DOTNET_INSTALL_FEED"; \
+    fi && \
+    bash /tmp/dotnet-install.sh $dotnet_install_args && \
     ln -sf "$DOTNET_ROOT/dotnet" /usr/local/bin/dotnet && \
     rm -f /tmp/dotnet-install.sh
 
@@ -65,7 +77,6 @@ RUN --mount=type=cache,target=/root/.npm,sharing=locked \
 # ---------- Source code ----------
 # .dockerignore excludes node_modules, so the installs above survive.
 COPY --chown=hermes:hermes . .
-COPY --chown=hermes:hermes data /opt/hermes/docker/image-data
 
 # ---------- Permissions ----------
 # Make install dir world-readable so any HERMES_UID can read it at runtime.
